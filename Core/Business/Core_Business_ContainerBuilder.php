@@ -37,6 +37,7 @@ class Core_Business_ContainerBuilder
 
         $container->bind('Core_Business_ConfigurationInterface', 'Adapter_Configuration', true);
         $container->bind('Core_Foundation_Database_DatabaseInterface', 'Adapter_Database', true);
+        $container->bind('Core_Foundation_Crypto_Hashing', 'Core_Foundation_Crypto_Hashing', true);
 
         return $container;
     }

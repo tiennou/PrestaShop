@@ -162,7 +162,7 @@ class CustomerCore extends ObjectModel
             'lastname' =>                    array('type' => self::TYPE_STRING, 'validate' => 'isName', 'required' => true, 'size' => 32),
             'firstname' =>                    array('type' => self::TYPE_STRING, 'validate' => 'isName', 'required' => true, 'size' => 32),
             'email' =>                        array('type' => self::TYPE_STRING, 'validate' => 'isEmail', 'required' => true, 'size' => 128),
-            'passwd' =>                    array('type' => self::TYPE_STRING, 'validate' => 'isPasswd', 'required' => true, 'size' => 32),
+            'passwd' =>                    array('type' => self::TYPE_STRING, 'validate' => 'isPasswd', 'required' => true, 'size' => 255),
             'last_passwd_gen' =>            array('type' => self::TYPE_STRING, 'copy_post' => false),
             'id_gender' =>                    array('type' => self::TYPE_INT, 'validate' => 'isUnsignedId'),
             'birthday' =>                    array('type' => self::TYPE_DATE, 'validate' => 'isBirthDate'),
@@ -267,9 +267,7 @@ class CustomerCore extends ObjectModel
         Db::getInstance()->execute('DELETE FROM '._DB_PREFIX_.'specific_price WHERE id_customer='.(int)$this->id);
         Db::getInstance()->execute('DELETE FROM '._DB_PREFIX_.'compare WHERE id_customer='.(int)$this->id);
 
-        $carts = Db::getInstance()->executes('SELECT id_cart
-															FROM '._DB_PREFIX_.'cart
-															WHERE id_customer='.(int)$this->id);
+        $carts = Db::getInstance()->executes('SELECT id_cart FROM '._DB_PREFIX_.'cart WHERE id_customer='.(int)$this->id);
         if ($carts) {
             foreach ($carts as $cart) {
                 Db::getInstance()->execute('DELETE FROM '._DB_PREFIX_.'cart WHERE id_cart='.(int)$cart['id_cart']);
@@ -277,9 +275,7 @@ class CustomerCore extends ObjectModel
             }
         }
 
-        $cts = Db::getInstance()->executes('SELECT id_customer_thread
-															FROM '._DB_PREFIX_.'customer_thread
-															WHERE id_customer='.(int)$this->id);
+        $cts = Db::getInstance()->executes('SELECT id_customer_thread FROM '._DB_PREFIX_.'customer_thread WHERE id_customer='.(int)$this->id);
         if ($cts) {
             foreach ($cts as $ct) {
                 Db::getInstance()->execute('DELETE FROM '._DB_PREFIX_.'customer_thread WHERE id_customer_thread='.(int)$ct['id_customer_thread']);
@@ -320,24 +316,52 @@ class CustomerCore extends ObjectModel
             die(Tools::displayError());
         }
 
+        if (isset($passwd)) {
+            try {
+                $crypto = Adapter_ServiceLocator::get('Core_Foundation_Crypto_Hashing');
+            } catch (Adapter_Exception $e) {
+                return false;
+            }
+
+            $hash = Db::getInstance()->getValue('SELECT `passwd` FROM `'._DB_PREFIX_.'customer` WHERE `email` = \''.pSQL($email).'\'
+                '.Shop::addSqlRestriction(Shop::SHARE_CUSTOMER).' AND `deleted` = 0 AND `is_guest` = 0');
+
+            $checked_hash = $crypto->checkHash($passwd, $hash, array('cookie_key' => _COOKIE_KEY_));
+            if (!$checked_hash) {
+                return false;
+            }
+        }
+
         $result = Db::getInstance()->getRow('
-		SELECT *
-		FROM `'._DB_PREFIX_.'customer`
-		WHERE `email` = \''.pSQL($email).'\'
-		'.Shop::addSqlRestriction(Shop::SHARE_CUSTOMER).'
-		'.(isset($passwd) ? 'AND `passwd` = \''.pSQL(Tools::encrypt($passwd)).'\'' : '').'
-		AND `deleted` = 0
-		'.($ignore_guest ? ' AND `is_guest` = 0' : ''));
+        SELECT *
+        FROM `'._DB_PREFIX_.'customer`
+        WHERE `email` = \''.pSQL($email).'\'
+        '.Shop::addSqlRestriction(Shop::SHARE_CUSTOMER).'
+        '.(isset($passwd) ? 'AND `passwd` = \''.pSQL($hash).'\'' : '').'
+        AND `deleted` = 0
+        '.($ignore_guest ? ' AND `is_guest` = 0' : ''));
 
         if (!$result) {
             return false;
         }
+
+        if (is_string($checked_hash)) {
+            $this->passwd = $checked_hash;
+            $this->update();
+        }
+
         $this->id = $result['id_customer'];
         foreach ($result as $key => $value) {
             if (property_exists($this, $key)) {
                 $this->{$key} = $value;
             }
         }
+
+        if (!$crypto->isFirstHash($passwd, $hash, _COOKIE_KEY_)) {
+            $this->passwd = $crypto->encrypt($passwd, _COOKIE_KEY_);
+            $this->update();
+        }
+
         return $this;
     }
 
@@ -487,16 +511,16 @@ class CustomerCore extends ObjectModel
      */
     public static function checkPassword($id_customer, $passwd)
     {
-        if (!Validate::isUnsignedId($id_customer) || !Validate::isMd5($passwd)) {
+        if (!Validate::isUnsignedId($id_customer)) {
             die(Tools::displayError());
         }
         $cache_id = 'Customer::checkPassword'.(int)$id_customer.'-'.$passwd;
         if (!Cache::isStored($cache_id)) {
             $result = (bool)Db::getInstance(_PS_USE_SQL_SLAVE_)->getValue('
-			SELECT `id_customer`
-			FROM `'._DB_PREFIX_.'customer`
-			WHERE `id_customer` = '.(int)$id_customer.'
-			AND `passwd` = \''.pSQL($passwd).'\'');
+            SELECT `id_customer`
+            FROM `'._DB_PREFIX_.'customer`
+            WHERE `id_customer` = '.(int)$id_customer.'
+            AND `passwd` = \''.pSQL($passwd).'\'');
             Cache::store($cache_id, $result);
             return $result;
         }
@@ -769,8 +793,9 @@ class CustomerCore extends ObjectModel
             return false;
         }
 
+        $crypto = Adapter_ServiceLocator::get('Core_Foundation_Crypto_Hashing');
         $this->is_guest = 0;
-        $this->passwd = Tools::encrypt($password);
+        $this->passwd = $crypto->hash($password);
         $this->cleanGroups();
         $this->addGroups(array(Configuration::get('PS_CUSTOMER_GROUP'))); // add default customer group
         if ($this->update()) {
@@ -803,8 +828,10 @@ class CustomerCore extends ObjectModel
 
     public function setWsPasswd($passwd)
     {
+        $crypto = Adapter_ServiceLocator::get('Core_Foundation_Crypto_Hashing');
+
         if ($this->id == 0 || $this->passwd != $passwd) {
-            $this->passwd = Tools::encrypt($passwd);
+            $this->passwd = $crypto->hash($passwd);
         }
         return true;
     }
@@ -872,6 +899,18 @@ class CustomerCore extends ObjectModel
         $cart = array_shift($carts);
         $cart = new Cart((int)$cart['id_cart']);
         return ($cart->nbProducts() === 0 ? (int)$cart->id : false);
+    }
+
+    public function validateController($htmlentities = true)
+    {
+        $errors = parent::validateController($htmlentities);
+        $crypto = Adapter_ServiceLocator::get('Core_Foundation_Crypto_Hashing');
+
+        if ($value = Tools::getValue('passwd')) {
+            $this->passwd = $crypto->hash($value);
+        }
+
+        return $errors;
     }
 
     public function getOutstanding()

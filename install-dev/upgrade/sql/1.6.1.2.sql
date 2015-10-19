@@ -35,3 +35,6 @@ ALTER TABLE `PREFIX_category_product` ADD INDEX(`id_category`, `position`);
 
 
 ALTER TABLE `PREFIX_address` CHANGE `company` `company` VARCHAR(64) NULL;
+
+ALTER TABLE `PREFIX_customer` CHANGE COLUMN `passwd` `passwd` varchar(255) NOT NULL;
+ALTER TABLE `PREFIX_employee` CHANGE COLUMN `passwd` `passwd` varchar(255) NOT NULL;
